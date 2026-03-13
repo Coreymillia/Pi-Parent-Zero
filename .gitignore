@@ -1,0 +1,15 @@
+# Local config with real credentials — never commit this
+config.json
+
+# Runtime data
+alerts.json
+watched_macs.json
+social_domains.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs
+*.log

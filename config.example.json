@@ -1,0 +1,11 @@
+{
+    "pihole_base_url": "http://192.168.0.103:8080/api",
+    "pihole_password": "",
+    "pialert_url": "http://192.168.0.103",
+    "pialert_api_key": "",
+    "bypass_threshold": 10,
+    "poll_interval_s": 30,
+    "query_window_min": 5,
+    "web_port": 5000,
+    "display_ip": "192.168.0.XXX"
+}

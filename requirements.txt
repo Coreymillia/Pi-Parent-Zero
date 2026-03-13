@@ -1,0 +1,6 @@
+adafruit-blinka
+adafruit-circuitpython-st7789
+Pillow
+Flask
+requests
+RPi.GPIO

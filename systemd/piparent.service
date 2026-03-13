@@ -1,0 +1,18 @@
+[Unit]
+Description=PiParent Parental Control Monitor
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/home/pi/piparent
+ExecStart=/usr/bin/python3 /home/pi/piparent/piparent.py
+WorkingDirectory=/home/pi/piparent
+StandardOutput=append:/home/pi/piparent/piparent.log
+StandardError=append:/home/pi/piparent/piparent.log
+Restart=always
+RestartSec=10
+User=pi
+
+[Install]
+WantedBy=multi-user.target
