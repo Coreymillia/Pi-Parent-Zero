@@ -13,3 +13,7 @@ __pycache__/
 
 # Logs
 *.log
+
+# PlatformIO build artifacts
+CYDBotReplies/.pio/
+INVERTEDCYDBotReplies/.pio/

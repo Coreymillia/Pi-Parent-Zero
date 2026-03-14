@@ -7,7 +7,8 @@ import json
 import os
 import re
 import requests as _requests
-from flask import Flask, request, redirect, render_template_string
+from datetime import datetime
+from flask import Flask, request, redirect, render_template_string, jsonify
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WATCHED_MACS_FILE  = os.path.join(BASE_DIR, 'watched_macs.json')
@@ -46,6 +47,8 @@ input[type=text] { background: #1a1a32; border: 1px solid #3a3a60; color: #eee; 
 .tag .x { background: none; border: none; color: #f88; cursor: pointer; font-size: 12px; padding: 0; }
 .flash { animation: fl 1s ease-in-out infinite; }
 @keyframes fl { 0%,100% { opacity:1; } 50% { opacity:0.25; } }
+.toggle-on  { background: #145214; border: 2px solid #40d040; color: #40d040; border-radius: 8px; padding: 12px 24px; font-size: 16px; font-weight: bold; cursor: pointer; width: 100%; }
+.toggle-off { background: #521414; border: 2px solid #d04040; color: #d04040; border-radius: 8px; padding: 12px 24px; font-size: 16px; font-weight: bold; cursor: pointer; width: 100%; }
 small { color: #666; }
 </style>
 """
@@ -66,6 +69,17 @@ _DASHBOARD_T = """<!DOCTYPE html><html><head>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>PiParent</title>""" + _BASE_STYLE + """</head><body>""" + _NAV + """
 <div class="container">
+  <div class="card">
+    <h2>Monitoring</h2>
+    <form method="post" action="/monitoring/toggle">
+      {% if monitoring_on %}
+      <button class="toggle-on" type="submit">🟢 MONITORING ON — tap to pause</button>
+      {% else %}
+      <button class="toggle-off" type="submit">🔴 MONITORING PAUSED — tap to resume</button>
+      {% endif %}
+    </form>
+  </div>
+
   <div class="card">
     <h2>Pi-hole Stats</h2>
     {% for label, val, col in stats %}
@@ -308,7 +322,13 @@ def create_app(watcher, config):
         alert_macs    = {a['mac'].lower() for a in active_alerts}
         return render_template_string(_DASHBOARD_T,
             stats=stats, watched=watched,
-            active_alerts=active_alerts, alert_macs=alert_macs)
+            active_alerts=active_alerts, alert_macs=alert_macs,
+            monitoring_on=watcher.monitoring_enabled)
+
+    @app.route('/monitoring/toggle', methods=['POST'])
+    def monitoring_toggle():
+        watcher.toggle_monitoring()
+        return redirect('/')
 
     @app.route('/devices')
     def devices():
@@ -444,5 +464,73 @@ def create_app(watcher, config):
     def alerts_clear_all():
         watcher.clear_all_alerts()
         return redirect('/alerts')
+
+    @app.route('/messages')
+    def messages():
+        """CYD endpoint — returns monitoring state, stats, hits, and alerts. Newest first."""
+        msgs = []
+        now_ts = datetime.now().strftime('%H:%M:%S')
+
+        # 1. Monitoring state — always first so CYD always knows current mode
+        state_text = 'MONITORING ON' if watcher.monitoring_enabled else 'MONITORING PAUSED'
+        msgs.append({
+            'type': 'sensor',
+            'to':   'STATUS',
+            'text': state_text,
+            'ts':   now_ts,
+        })
+
+        # 2. Pi-hole stats summary
+        with watcher._lock:
+            q = watcher.summary.get('queries', {})
+        if q:
+            pct  = q.get('percent_blocked', 0)
+            tot  = q.get('total', 0)
+            blk  = q.get('blocked', 0)
+            freq = q.get('frequency', 0)
+            msgs.append({
+                'type': 'sensor',
+                'to':   'PI-HOLE',
+                'text': f"Blocked {pct:.1f}% | {blk:,}/{tot:,} queries | {freq:.1f}/min",
+                'ts':   now_ts,
+            })
+
+        # 3. Recent watched-device hits (social/DoH queries that slipped through)
+        with watcher._lock:
+            hits = list(watcher.watched_hits[:10])
+        for h in hits:
+            label = 'DoH' if h['type'] == 'doh' else 'SOCIAL'
+            msgs.append({
+                'type': 'dm',
+                'to':   h['name'][:15],
+                'text': f"[{label}] {h['domain']}",
+                'ts':   h['ts'],
+            })
+
+        # 4. Alerts — newest first
+        with watcher._lock:
+            all_alerts = list(watcher.alerts)
+
+        for a in all_alerts:
+            atype = a.get('type', '')
+            if atype == 'bypass':
+                msg_type = 'system'
+            elif atype == 'doh_attempt':
+                msg_type = 'dm'
+            else:
+                msg_type = 'sensor'
+            try:
+                ts = datetime.fromisoformat(a['time']).strftime('%H:%M:%S')
+            except Exception:
+                ts = a.get('time', '')[:8]
+            cleared_tag = ' [cleared]' if a.get('cleared') else ''
+            msgs.append({
+                'type': msg_type,
+                'to':   a.get('name', 'ALERT')[:15],
+                'text': f"[{atype.upper()}] {a.get('message', '')}{cleared_tag}",
+                'ts':   ts,
+            })
+
+        return jsonify({'count': len(msgs), 'messages': msgs})
 
     return app

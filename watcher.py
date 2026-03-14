@@ -72,6 +72,9 @@ class Watcher:
 
         self.social_bypass_times = {}  # mac -> datetime of last unblocked social query
 
+        self.monitoring_enabled = True   # global alert toggle (pauses alert generation when False)
+        self.watched_hits = []           # recent allowed social/DoH query hits for CYD feed
+
     # ── Watched devices ───────────────────────────────────────────────────────
 
     def load_watched(self):
@@ -94,10 +97,20 @@ class Watcher:
         except Exception:
             return set()
 
+    # ── Monitoring toggle ─────────────────────────────────────────────────────
+
+    def toggle_monitoring(self):
+        self.monitoring_enabled = not self.monitoring_enabled
+        state = 'ON' if self.monitoring_enabled else 'OFF'
+        print(f"[Watcher] Monitoring turned {state}")
+        return self.monitoring_enabled
+
     # ── Alerts ────────────────────────────────────────────────────────────────
 
     def _add_alert(self, mac, name, alert_type, message):
-        """Add alert, suppressing duplicates within 10 minutes."""
+        """Add alert, suppressing duplicates within 10 minutes. Skipped when monitoring is off."""
+        if not self.monitoring_enabled:
+            return
         alert = {
             'mac': mac,
             'name': name,
@@ -205,6 +218,11 @@ class Watcher:
                     self.social_bypass_times[mac] = now
                 if (q.get('time') or 0) >= window_start:
                     mac_allowed_social[mac] += 1
+                    name = watched_macs[mac]['name']
+                    hit = {'name': name, 'domain': domain, 'type': 'social', 'ts': now.strftime('%H:%M:%S')}
+                    with self._lock:
+                        self.watched_hits.insert(0, hit)
+                        self.watched_hits = self.watched_hits[:30]
 
         for mac, count in mac_allowed_social.items():
             if count >= self.bypass_threshold:
@@ -227,6 +245,10 @@ class Watcher:
             mac    = ip_to_mac.get(qip, '').lower()
             if mac and mac in watched_macs:
                 name = watched_macs[mac]['name']
+                hit = {'name': name, 'domain': domain, 'type': 'doh', 'ts': datetime.now().strftime('%H:%M:%S')}
+                with self._lock:
+                    self.watched_hits.insert(0, hit)
+                    self.watched_hits = self.watched_hits[:30]
                 self._add_alert(
                     mac, name, 'doh_attempt',
                     f"Unblocked DoH query to {domain} — DNS may be bypassing Pi-hole"
