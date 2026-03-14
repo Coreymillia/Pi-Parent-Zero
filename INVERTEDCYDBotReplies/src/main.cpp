@@ -76,6 +76,7 @@ static int  cur_page   = 0;
 static int g_status_idx  = -1;
 static int g_pihole_idx  = -1;
 static int g_pialert_idx = -1;
+static int g_sniffer_count = 0;   // number of SNIFFER suspect messages
 
 // ---- State ----
 static bool          needs_redraw  = true;
@@ -124,6 +125,7 @@ static void buildPages() {
     page_count = 0;
     memset(pages, 0, sizeof(pages));
     g_status_idx = g_pihole_idx = g_pialert_idx = -1;
+    g_sniffer_count = 0;
 
     // Pass 1 — find dashboard source messages
     for (int i = 0; i < bm_count; i++) {
@@ -131,6 +133,7 @@ static void buildPages() {
         if (strcmp(to, "STATUS")  == 0) { g_status_idx  = i; continue; }
         if (strcmp(to, "PI-HOLE") == 0) { g_pihole_idx  = i; continue; }
         if (strcmp(to, "PIALERT") == 0) { g_pialert_idx = i; continue; }
+        if (strcmp(to, "SNIFFER") == 0) { g_sniffer_count++;  }
     }
 
     // Always create DASHBOARD as page 0
@@ -304,12 +307,20 @@ static void drawDashboard() {
         gfx->print("No data");
     }
 
-    // ── Monitoring status bar (full width, bottom) ────
+    // ── Monitoring / sniffer status bar (full width, bottom) ─────────────────
     int bar_y = SCREEN_H - 28;
     gfx->drawFastHLine(MARGIN_X, bar_y, SCREEN_W - MARGIN_X * 2, COL_DIM);
     bar_y += 7;
 
-    if (g_status_idx >= 0) {
+    if (g_sniffer_count > 0) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "! %d DNS BYPASS SUSPECT%s",
+                 g_sniffer_count, g_sniffer_count > 1 ? "S" : "");
+        gfx->setTextSize(1);
+        gfx->setTextColor(COL_RED, COL_BG);
+        gfx->setCursor(MARGIN_X, bar_y);
+        gfx->print(buf);
+    } else if (g_status_idx >= 0) {
         bool on = strstr(bm_msgs[g_status_idx].text, "ON") != nullptr
                && strstr(bm_msgs[g_status_idx].text, "PAUSED") == nullptr;
         gfx->setTextSize(1);

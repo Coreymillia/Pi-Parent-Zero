@@ -75,6 +75,10 @@ class Watcher:
         self.monitoring_enabled = True   # global alert toggle (pauses alert generation when False)
         self.watched_hits = []           # recent allowed social/DoH query hits for CYD feed
 
+        self.dns_suspects      = []      # devices online but silent to Pi-hole [{name,mac,ip,minutes_silent,first_seen}]
+        self._dns_querying_times = {}    # ip -> datetime last seen in Pi-hole queries
+        self._dns_first_silent   = {}    # ip -> datetime when first noticed as silent
+
     # ── Watched devices ───────────────────────────────────────────────────────
 
     def load_watched(self):
@@ -224,6 +228,15 @@ class Watcher:
                         self.watched_hits.insert(0, hit)
                         self.watched_hits = self.watched_hits[:30]
 
+        # Record all querying IPs from this batch for DNS silence detection
+        now_dt = datetime.now()
+        for q in queries:
+            client = q.get('client', {})
+            qip = client.get('ip', '') if isinstance(client, dict) else str(client)
+            if qip:
+                with self._lock:
+                    self._dns_querying_times[qip] = now_dt
+
         for mac, count in mac_allowed_social.items():
             if count >= self.bypass_threshold:
                 name = watched_macs[mac]['name']
@@ -253,6 +266,85 @@ class Watcher:
                     mac, name, 'doh_attempt',
                     f"Unblocked DoH query to {domain} — DNS may be bypassing Pi-hole"
                 )
+
+    # ── DNS silence detector ──────────────────────────────────────────────────
+
+    def _check_dns_silence(self):
+        """Cross-reference Pi.Alert online devices vs Pi-hole recent query clients.
+
+        A device that is online (per Pi.Alert) but has not appeared in Pi-hole
+        query logs for DNS_ACTIVE_WINDOW_MIN minutes is flagged as a potential
+        DNS bypass suspect after a GRACE_MINUTES grace period.
+        """
+        DNS_ACTIVE_WINDOW_MIN = 30   # must have queried Pi-hole within this window to be "active"
+        GRACE_MINUTES         = 10   # ignore freshly-online devices for this long before flagging
+
+        now = datetime.now()
+
+        # Extract Pi-hole's own IP to exclude it from suspect checks
+        try:
+            pihole_ip = self.client.base_url.split('/')[-1].split(':')[0]
+        except Exception:
+            pihole_ip = ''
+        exclude_ips = {'127.0.0.1', '::1', pihole_ip}
+
+        with self._lock:
+            online_devices = [d for d in self.pialert_devices if d.get('_online')]
+            querying_times  = dict(self._dns_querying_times)
+
+        # Clean up stale querying-times entries older than 2 hours
+        cutoff = now - timedelta(hours=2)
+        with self._lock:
+            self._dns_querying_times = {
+                ip: t for ip, t in self._dns_querying_times.items() if t > cutoff
+            }
+
+        suspects = []
+        for dev in online_devices:
+            ip   = dev.get('dev_LastIP', '')
+            mac  = (dev.get('dev_MAC') or '').lower()
+            name = (dev.get('dev_Name') or dev.get('dev_Vendor') or mac or ip)[:15]
+
+            if not ip or ip in exclude_ips:
+                continue
+
+            last_query = querying_times.get(ip)
+            recently_queried = (
+                last_query is not None
+                and (now - last_query).total_seconds() < DNS_ACTIVE_WINDOW_MIN * 60
+            )
+
+            if recently_queried:
+                # Device IS querying Pi-hole — reset any silent timer
+                with self._lock:
+                    self._dns_first_silent.pop(ip, None)
+            else:
+                # Device NOT recently seen in Pi-hole queries
+                with self._lock:
+                    if ip not in self._dns_first_silent:
+                        self._dns_first_silent[ip] = now
+                    first_silent = self._dns_first_silent[ip]
+
+                minutes_silent = (now - first_silent).total_seconds() / 60
+                if minutes_silent >= GRACE_MINUTES:
+                    suspects.append({
+                        'name':           name,
+                        'mac':            mac,
+                        'ip':             ip,
+                        'minutes_silent': int(minutes_silent),
+                        'first_seen':     first_silent.strftime('%H:%M:%S'),
+                    })
+                    if self.monitoring_enabled:
+                        self._add_alert(
+                            mac, name, 'dns_bypass',
+                            f"No Pi-hole queries for {int(minutes_silent)}min — may be bypassing DNS ({ip})"
+                        )
+
+        with self._lock:
+            self.dns_suspects = suspects
+
+        if suspects:
+            print(f"[Watcher] DNS suspects: {[s['name'] for s in suspects]}")
 
     # ── Slow poll — network, Pi.Alert, summary (every poll_interval_s) ────────
 
@@ -319,6 +411,12 @@ class Watcher:
                     self.pialert_events = events
             except Exception as e:
                 print(f"[Watcher] Pi.Alert poll error: {e}")
+
+        # DNS silence detection — runs after Pi.Alert devices are updated
+        try:
+            self._check_dns_silence()
+        except Exception as e:
+            print(f"[Watcher] DNS silence check error: {e}")
 
     def _run_slow(self):
         self.load_alerts()

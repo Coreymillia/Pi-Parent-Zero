@@ -103,6 +103,19 @@ _DASHBOARD_T = """<!DOCTYPE html><html><head>
   </div>
   {% endif %}
 
+  {% if dns_suspects %}
+  <div class="card">
+    <h2 style="color:#ff9040">🔍 DNS Bypass Suspects ({{ dns_suspects|length }})</h2>
+    {% for s in dns_suspects %}
+    <div class="alert-box" style="border-left-color:#ff9040;background:#1a1000">
+      <div class="atype" style="color:#ff9040">DNS SILENT — {{ s.name }}</div>
+      <div class="amsg">{{ s.ip }} — no Pi-hole queries for {{ s.minutes_silent }} min</div>
+      <div class="atime">First noticed: {{ s.first_seen }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
   <div class="card">
     <h2>Watched Devices ({{ watched|length }})</h2>
     {% for d in watched %}
@@ -320,9 +333,12 @@ def create_app(watcher, config):
         watched       = _load_watched()
         active_alerts = watcher.get_active_alerts()
         alert_macs    = {a['mac'].lower() for a in active_alerts}
+        with watcher._lock:
+            dns_suspects = list(watcher.dns_suspects)
         return render_template_string(_DASHBOARD_T,
             stats=stats, watched=watched,
             active_alerts=active_alerts, alert_macs=alert_macs,
+            dns_suspects=dns_suspects,
             monitoring_on=watcher.monitoring_enabled)
 
     @app.route('/monitoring/toggle', methods=['POST'])
@@ -510,7 +526,18 @@ def create_app(watcher, config):
                 'ts':   now_ts,
             })
 
-        # 3. Recent watched-device hits (social/DoH queries that slipped through)
+        # 4. DNS bypass suspects (SNIFFER page on CYD)
+        with watcher._lock:
+            suspects = list(watcher.dns_suspects)
+        for s in suspects:
+            msgs.append({
+                'type': 'system',
+                'to':   'SNIFFER',
+                'text': f"[DNS] {s['name']} {s['ip']} {s['minutes_silent']}m silent",
+                'ts':   s['first_seen'],
+            })
+
+        # 5. Recent watched-device hits (social/DoH queries that slipped through)
         with watcher._lock:
             hits = list(watcher.watched_hits[:10])
         for h in hits:
