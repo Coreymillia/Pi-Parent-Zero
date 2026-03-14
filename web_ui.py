@@ -495,6 +495,21 @@ def create_app(watcher, config):
                 'ts':   now_ts,
             })
 
+        # 3. Pi.Alert network summary
+        with watcher._lock:
+            pa = dict(watcher.pialert_status)
+        if pa:
+            online  = pa.get('Online_Devices', 0)
+            offline = pa.get('Offline_Devices', 0)
+            new_dev = pa.get('New_Devices', 0)
+            scan    = pa.get('Last_Scan', '--')
+            msgs.append({
+                'type': 'sensor',
+                'to':   'PIALERT',
+                'text': f"{online} online | {offline} offline | {new_dev} new | {scan}",
+                'ts':   now_ts,
+            })
+
         # 3. Recent watched-device hits (social/DoH queries that slipped through)
         with watcher._lock:
             hits = list(watcher.watched_hits[:10])
