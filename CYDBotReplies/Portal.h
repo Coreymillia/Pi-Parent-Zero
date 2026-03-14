@@ -1,5 +1,5 @@
 // Portal.h — Captive portal + NVS settings for CYDBotReplies
-// Settings: WiFi SSID/pass, bot IP, bot port (default 8766)
+// Settings: WiFi SSID/pass, bot IP, bot port (default 5000)
 
 #pragma once
 #include <Arduino.h>
@@ -12,7 +12,7 @@
 static char   br_wifi_ssid[64]  = "";
 static char   br_wifi_pass[64]  = "";
 static char   br_bot_ip[64]     = "192.168.0.111";
-static uint16_t br_bot_port     = 8766;
+static uint16_t br_bot_port     = 5000;
 static uint8_t  br_brightness   = 200;   // backlight 10–255
 
 static bool   br_has_settings   = false;
@@ -26,7 +26,7 @@ static void brLoadSettings() {
     strlcpy(br_wifi_ssid, _prefs.getString("ssid",   "").c_str(),   sizeof(br_wifi_ssid));
     strlcpy(br_wifi_pass, _prefs.getString("wpass",  "").c_str(),   sizeof(br_wifi_pass));
     strlcpy(br_bot_ip,    _prefs.getString("botip",  "192.168.0.111").c_str(), sizeof(br_bot_ip));
-    br_bot_port   = (uint16_t)_prefs.getUInt("botport", 8766);
+    br_bot_port   = (uint16_t)_prefs.getUInt("botport", 5000);
     br_brightness = (uint8_t) _prefs.getUChar("bright", 200);
     if (br_brightness < 10) br_brightness = 10;
     _prefs.end();
@@ -103,7 +103,7 @@ static void _portalHandleSave() {
     String wpass   = _portal_server.arg("wpass");
     String botip   = _portal_server.arg("botip");
     uint16_t port  = (uint16_t)_portal_server.arg("botport").toInt();
-    if (port == 0) port = 8766;
+    if (port == 0) port = 5000;
     uint8_t bright = (uint8_t)constrain(_portal_server.arg("bright").toInt(), 10, 255);
 
     brSaveSettings(ssid.c_str(), wpass.c_str(), botip.c_str(), port, bright);

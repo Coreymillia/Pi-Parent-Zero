@@ -101,6 +101,26 @@ class Watcher:
         except Exception:
             return set()
 
+    def toggle_vpn_mode(self, mac):
+        """Toggle vpn_mode for a watched device. Returns new state or None if not found."""
+        mac = mac.lower()
+        devices = self.load_watched()
+        found = False
+        for d in devices:
+            if d['mac'].lower() == mac:
+                d['vpn_mode'] = not bool(d.get('vpn_mode', False))
+                found = True
+                break
+        if found:
+            self.save_watched(devices)
+            # Clear any silent timer so it re-evaluates immediately
+            with self._lock:
+                for ip, m in self.ip_to_mac.items():
+                    if m == mac:
+                        self._dns_first_silent.pop(ip, None)
+            return next(d['vpn_mode'] for d in devices if d['mac'].lower() == mac)
+        return None
+
     # ── Monitoring toggle ─────────────────────────────────────────────────────
 
     def toggle_monitoring(self):
@@ -270,27 +290,30 @@ class Watcher:
     # ── DNS silence detector ──────────────────────────────────────────────────
 
     def _check_dns_silence(self):
-        """Cross-reference Pi.Alert online devices vs Pi-hole recent query clients.
+        """Check only watched MACs for DNS silence (Pi-hole query absence).
 
-        A device that is online (per Pi.Alert) but has not appeared in Pi-hole
-        query logs for DNS_ACTIVE_WINDOW_MIN minutes is flagged as a potential
-        DNS bypass suspect after a GRACE_MINUTES grace period.
+        Only watched devices are evaluated — this avoids false positives from
+        IoT devices, printers, and other hosts that legitimately use other DNS.
+
+        kind='bypass' — device is silent and NOT marked as vpn_mode
+        kind='vpn'    — device is silent but vpn_mode=True (likely encrypted tunnel)
         """
-        DNS_ACTIVE_WINDOW_MIN = 30   # must have queried Pi-hole within this window to be "active"
-        GRACE_MINUTES         = 10   # ignore freshly-online devices for this long before flagging
+        DNS_ACTIVE_WINDOW_MIN = 30   # must have queried Pi-hole within this window
+        GRACE_MINUTES         = 10   # grace period before flagging a newly-online device
 
-        now = datetime.now()
-
-        # Extract Pi-hole's own IP to exclude it from suspect checks
-        try:
-            pihole_ip = self.client.base_url.split('/')[-1].split(':')[0]
-        except Exception:
-            pihole_ip = ''
-        exclude_ips = {'127.0.0.1', '::1', pihole_ip}
+        now     = datetime.now()
+        watched = self.load_watched()
+        watched_map = {d['mac'].lower(): d for d in watched}
 
         with self._lock:
-            online_devices = [d for d in self.pialert_devices if d.get('_online')]
-            querying_times  = dict(self._dns_querying_times)
+            ip_to_mac      = dict(self.ip_to_mac)
+            querying_times = dict(self._dns_querying_times)
+
+        # Build reverse map: mac -> current IP (from ip_to_mac which covers both
+        # Pi-hole network devices and Pi.Alert supplemental data)
+        mac_to_ip = {}
+        for ip, mac in ip_to_mac.items():
+            mac_to_ip.setdefault(mac, ip)  # keep first (most recent) IP per MAC
 
         # Clean up stale querying-times entries older than 2 hours
         cutoff = now - timedelta(hours=2)
@@ -300,13 +323,13 @@ class Watcher:
             }
 
         suspects = []
-        for dev in online_devices:
-            ip   = dev.get('dev_LastIP', '')
-            mac  = (dev.get('dev_MAC') or '').lower()
-            name = (dev.get('dev_Name') or dev.get('dev_Vendor') or mac or ip)[:15]
+        for mac, dev in watched_map.items():
+            ip   = mac_to_ip.get(mac, '')
+            name = dev.get('name', mac)[:15]
+            vpn  = bool(dev.get('vpn_mode', False))
 
-            if not ip or ip in exclude_ips:
-                continue
+            if not ip:
+                continue  # device not currently seen on network
 
             last_query = querying_times.get(ip)
             recently_queried = (
@@ -315,11 +338,9 @@ class Watcher:
             )
 
             if recently_queried:
-                # Device IS querying Pi-hole — reset any silent timer
                 with self._lock:
                     self._dns_first_silent.pop(ip, None)
             else:
-                # Device NOT recently seen in Pi-hole queries
                 with self._lock:
                     if ip not in self._dns_first_silent:
                         self._dns_first_silent[ip] = now
@@ -327,24 +348,32 @@ class Watcher:
 
                 minutes_silent = (now - first_silent).total_seconds() / 60
                 if minutes_silent >= GRACE_MINUTES:
+                    kind = 'vpn' if vpn else 'bypass'
                     suspects.append({
                         'name':           name,
                         'mac':            mac,
                         'ip':             ip,
                         'minutes_silent': int(minutes_silent),
                         'first_seen':     first_silent.strftime('%H:%M:%S'),
+                        'kind':           kind,
                     })
                     if self.monitoring_enabled:
-                        self._add_alert(
-                            mac, name, 'dns_bypass',
-                            f"No Pi-hole queries for {int(minutes_silent)}min — may be bypassing DNS ({ip})"
-                        )
+                        if kind == 'vpn':
+                            self._add_alert(
+                                mac, name, 'vpn_or_encrypted',
+                                f"No Pi-hole queries for {int(minutes_silent)}min — VPN or encrypted DNS likely ({ip})"
+                            )
+                        else:
+                            self._add_alert(
+                                mac, name, 'dns_bypass',
+                                f"No Pi-hole queries for {int(minutes_silent)}min — may be bypassing DNS ({ip})"
+                            )
 
         with self._lock:
             self.dns_suspects = suspects
 
         if suspects:
-            print(f"[Watcher] DNS suspects: {[s['name'] for s in suspects]}")
+            print(f"[Watcher] DNS suspects: {[(s['name'], s['kind']) for s in suspects]}")
 
     # ── Slow poll — network, Pi.Alert, summary (every poll_interval_s) ────────
 

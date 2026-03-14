@@ -105,13 +105,31 @@ _DASHBOARD_T = """<!DOCTYPE html><html><head>
 
   {% if dns_suspects %}
   <div class="card">
-    <h2 style="color:#ff9040">🔍 DNS Bypass Suspects ({{ dns_suspects|length }})</h2>
+    <h2 style="color:#ff9040">🔍 DNS Suspects ({{ dns_suspects|length }})</h2>
     {% for s in dns_suspects %}
-    <div class="alert-box" style="border-left-color:#ff9040;background:#1a1000">
-      <div class="atype" style="color:#ff9040">DNS SILENT — {{ s.name }}</div>
+    {% if s.kind == 'vpn' %}
+    <div class="alert-box" style="border-left-color:#c8a000;background:#1a1500">
+      <div class="atype" style="color:#ffcc00">VPN / ENCRYPTED — {{ s.name }}</div>
       <div class="amsg">{{ s.ip }} — no Pi-hole queries for {{ s.minutes_silent }} min</div>
-      <div class="atime">First noticed: {{ s.first_seen }}</div>
+      <div class="atime">First noticed: {{ s.first_seen }} &nbsp;·&nbsp;
+        <form method="post" action="/devices/vpn_toggle" style="display:inline">
+          <input type="hidden" name="mac" value="{{ s.mac }}">
+          <button class="btn" type="submit" style="padding:2px 8px;font-size:11px;background:#3a2800">Unmark VPN</button>
+        </form>
+      </div>
     </div>
+    {% else %}
+    <div class="alert-box" style="border-left-color:#ff4040;background:#1a0800">
+      <div class="atype" style="color:#ff6060">DNS BYPASS — {{ s.name }}</div>
+      <div class="amsg">{{ s.ip }} — no Pi-hole queries for {{ s.minutes_silent }} min</div>
+      <div class="atime">First noticed: {{ s.first_seen }} &nbsp;·&nbsp;
+        <form method="post" action="/devices/vpn_toggle" style="display:inline">
+          <input type="hidden" name="mac" value="{{ s.mac }}">
+          <button class="btn" type="submit" style="padding:2px 8px;font-size:11px;background:#1a2800">Mark as VPN</button>
+        </form>
+      </div>
+    </div>
+    {% endif %}
     {% endfor %}
   </div>
   {% endif %}
@@ -120,12 +138,23 @@ _DASHBOARD_T = """<!DOCTYPE html><html><head>
     <h2>Watched Devices ({{ watched|length }})</h2>
     {% for d in watched %}
     {% set alerted = d.mac|lower in alert_macs %}
+    {% set vpn_on  = d.get('vpn_mode', False) %}
     <div class="dev-row">
       <span>
         <span class="dot {{ 'warn' if alerted else 'ok' }}"></span>
         {{ d.name }} <small>{{ d.mac }}</small>
+        {% if vpn_on %}<span style="color:#ffcc00;font-size:11px;margin-left:6px">🔒 VPN</span>{% endif %}
       </span>
-      {% if alerted %}<span style="color:#ff6868;font-size:12px">⚠ bypass</span>{% endif %}
+      <span style="display:flex;gap:6px;align-items:center">
+        {% if alerted %}<span style="color:#ff6868;font-size:12px">⚠ bypass</span>{% endif %}
+        <form method="post" action="/devices/vpn_toggle" style="margin:0">
+          <input type="hidden" name="mac" value="{{ d.mac }}">
+          <button class="btn" type="submit"
+            style="padding:3px 8px;font-size:11px;background:{{ '#3a2800' if vpn_on else '#1a3a00' }};color:{{ '#ffcc00' if vpn_on else '#80d080' }}">
+            {{ '🔒 VPN' if vpn_on else '🔓 VPN?' }}
+          </button>
+        </form>
+      </span>
     </div>
     {% else %}
     <p style="color:#666">No devices watched. <a href="/devices" style="color:#90c8ff">Add one →</a></p>
@@ -377,6 +406,13 @@ def create_app(watcher, config):
         _save_watched([d for d in _load_watched() if d['mac'].lower() != mac])
         return redirect('/devices')
 
+    @app.route('/devices/vpn_toggle', methods=['POST'])
+    def devices_vpn_toggle():
+        mac = request.form.get('mac', '').strip().lower()
+        watcher.toggle_vpn_mode(mac)
+        ref = request.referrer or '/'
+        return redirect(ref)
+
     @app.route('/blocklist')
     def blocklist():
         social = _load_social()
@@ -530,10 +566,11 @@ def create_app(watcher, config):
         with watcher._lock:
             suspects = list(watcher.dns_suspects)
         for s in suspects:
+            prefix = '[VPN?]' if s.get('kind') == 'vpn' else '[DNS]'
             msgs.append({
                 'type': 'system',
                 'to':   'SNIFFER',
-                'text': f"[DNS] {s['name']} {s['ip']} {s['minutes_silent']}m silent",
+                'text': f"{prefix} {s['name']} {s['ip']} {s['minutes_silent']}m silent",
                 'ts':   s['first_seen'],
             })
 

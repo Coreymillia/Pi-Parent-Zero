@@ -76,7 +76,8 @@ static int  cur_page   = 0;
 static int g_status_idx  = -1;
 static int g_pihole_idx  = -1;
 static int g_pialert_idx = -1;
-static int g_sniffer_count = 0;   // number of SNIFFER suspect messages
+static int g_sniffer_count = 0;   // bypass suspects
+static int g_vpn_count     = 0;   // VPN/encrypted suspects
 
 // ---- State ----
 static bool          needs_redraw  = true;
@@ -126,14 +127,19 @@ static void buildPages() {
     memset(pages, 0, sizeof(pages));
     g_status_idx = g_pihole_idx = g_pialert_idx = -1;
     g_sniffer_count = 0;
+    g_vpn_count     = 0;
 
     // Pass 1 — find dashboard source messages
     for (int i = 0; i < bm_count; i++) {
-        const char* to = bm_msgs[i].to;
+        const char* to   = bm_msgs[i].to;
+        const char* text = bm_msgs[i].text;
         if (strcmp(to, "STATUS")  == 0) { g_status_idx  = i; continue; }
         if (strcmp(to, "PI-HOLE") == 0) { g_pihole_idx  = i; continue; }
         if (strcmp(to, "PIALERT") == 0) { g_pialert_idx = i; continue; }
-        if (strcmp(to, "SNIFFER") == 0) { g_sniffer_count++;  }
+        if (strcmp(to, "SNIFFER") == 0) {
+            if (strncmp(text, "[VPN?]", 6) == 0) g_vpn_count++;
+            else                                  g_sniffer_count++;
+        }
     }
 
     // Always create DASHBOARD as page 0
@@ -313,11 +319,26 @@ static void drawDashboard() {
     bar_y += 7;
 
     if (g_sniffer_count > 0) {
-        char buf[32];
-        snprintf(buf, sizeof(buf), "! %d DNS BYPASS SUSPECT%s",
-                 g_sniffer_count, g_sniffer_count > 1 ? "S" : "");
+        char buf[36];
+        snprintf(buf, sizeof(buf), "! %d DNS BYPASS%s%s",
+                 g_sniffer_count,
+                 g_sniffer_count > 1 ? "ES" : "",
+                 g_vpn_count > 0 ? " +" : "");
         gfx->setTextSize(1);
         gfx->setTextColor(COL_RED, COL_BG);
+        gfx->setCursor(MARGIN_X, bar_y);
+        gfx->print(buf);
+        if (g_vpn_count > 0) {
+            char vbuf[16];
+            snprintf(vbuf, sizeof(vbuf), " %dVPN?", g_vpn_count);
+            gfx->setTextColor(COL_YELLOW, COL_BG);
+            gfx->print(vbuf);
+        }
+    } else if (g_vpn_count > 0) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "? %d VPN/ENCRYPTED", g_vpn_count);
+        gfx->setTextSize(1);
+        gfx->setTextColor(COL_YELLOW, COL_BG);
         gfx->setCursor(MARGIN_X, bar_y);
         gfx->print(buf);
     } else if (g_status_idx >= 0) {

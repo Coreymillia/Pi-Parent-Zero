@@ -249,10 +249,12 @@ def _draw_alerts(draw):
         return
 
     type_labels = {
-        'bypass':      'BYPASS',
-        'ip_change':   'IP CHANGE',
-        'mac_change':  'MAC CHANGE',
-        'doh_attempt': 'DoH BYPASS',
+        'bypass':           'BYPASS',
+        'dns_bypass':       'DNS BYPASS',
+        'vpn_or_encrypted': 'VPN/ENCRYPT',
+        'ip_change':        'IP CHANGE',
+        'mac_change':       'MAC CHANGE',
+        'doh_attempt':      'DoH BYPASS',
     }
     y = 22
     for a in active[:4]:
@@ -261,9 +263,9 @@ def _draw_alerts(draw):
         label = type_labels.get(a['type'], a['type'].upper())
         name  = a.get('name', a.get('mac', '?'))[:16]
         t     = (a.get('time', ''))[11:16]
-        if a['type'] == 'doh_attempt':
+        if a['type'] in ('doh_attempt', 'vpn_or_encrypted'):
             col = YELLOW
-        elif a['type'] == 'bypass':
+        elif a['type'] in ('bypass', 'dns_bypass'):
             col = RED
         else:
             col = ORANGE
