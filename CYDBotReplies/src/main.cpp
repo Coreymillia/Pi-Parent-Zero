@@ -58,6 +58,7 @@ XPT2046_Touchscreen ts(XPT2046_CS, XPT2046_IRQ);
 #define MARGIN_X    4
 #define ROW_H       16
 #define MAX_ROWS    (CONTENT_H / ROW_H)
+#define MON_DIV_Y   (CONTENT_Y + 87)   // divider between stats and live feed
 
 // ---- Page grouping ----
 #define MAX_PAGES     12
@@ -206,8 +207,8 @@ static void drawDashboard() {
     const int R_X   = MID_X + MARGIN_X;   // 164
     const int COL_CHARS = (MID_X - MARGIN_X * 2) / 6;  // ~25 chars per column
 
-    // Vertical divider
-    gfx->drawFastVLine(MID_X, CONTENT_Y, CONTENT_H - 32, COL_DIM);
+    // Vertical divider — only for the stats half, stops at the live feed divider
+    gfx->drawFastVLine(MID_X, CONTENT_Y, MON_DIV_Y - CONTENT_Y, COL_DIM);
 
     // ── Column headers ────────────────────────────────
     int cy = CONTENT_Y + 4;
@@ -300,20 +301,62 @@ static void drawDashboard() {
                 right_y += ROW_H;
             }
         }
-        // Last scan time (parts[3])
-        if (np >= 4) {
-            gfx->setTextSize(1);
-            gfx->setTextColor(COL_GREY, COL_BG);
-            gfx->setCursor(R_X, right_y);
-            char scan[16];
-            snprintf(scan, sizeof(scan), "scan %s", parts[3]);
-            gfx->print(scan);
-        }
+        // Last scan time removed — space used by live feed below
     } else {
         gfx->setTextSize(1);
         gfx->setTextColor(COL_GREY, COL_BG);
         gfx->setCursor(R_X, cy);
         gfx->print("No data");
+    }
+
+    // ── Live feed — full-width bottom half (reuses existing device messages) ──
+    gfx->drawFastHLine(MARGIN_X, MON_DIV_Y, SCREEN_W - MARGIN_X * 2, COL_DIM);
+
+    int mon_y = MON_DIV_Y + 4;
+    const int MON_LIMIT_Y = SCREEN_H - 30;
+    const int TS_W = 8 * 6 + MARGIN_X;
+    bool any_device = false;
+
+    for (int i = 0; i < bm_count && mon_y + ROW_H <= MON_LIMIT_Y; i++) {
+        const char* to = bm_msgs[i].to;
+        if (strcmp(to, "STATUS")  == 0) continue;
+        if (strcmp(to, "PI-HOLE") == 0) continue;
+        if (strcmp(to, "PIALERT") == 0) continue;
+        if (strcmp(to, "SNIFFER") == 0) continue;
+        any_device = true;
+
+        // Device name in yellow
+        char dname[10]; strlcpy(dname, to, sizeof(dname));
+        gfx->setTextSize(1);
+        gfx->setTextColor(COL_YELLOW, COL_BG);
+        gfx->setCursor(MARGIN_X, mon_y);
+        gfx->print(dname);
+        int tx = MARGIN_X + strlen(dname) * 6 + 4;
+
+        // Message text — truncate to fit before timestamp
+        int txt_max = (SCREEN_W - tx - TS_W) / 6;
+        char txt[48] = "";
+        int copy = strlen(bm_msgs[i].text);
+        if (copy > txt_max) copy = txt_max;
+        strncpy(txt, bm_msgs[i].text, copy); txt[copy] = '\0';
+        gfx->setTextColor(msgColor(bm_msgs[i].type), COL_BG);
+        gfx->setCursor(tx, mon_y);
+        gfx->print(txt);
+
+        // Timestamp right-aligned
+        if (bm_msgs[i].ts[0]) {
+            gfx->setTextColor(COL_GREY, COL_BG);
+            gfx->setCursor(SCREEN_W - TS_W + MARGIN_X, mon_y);
+            gfx->print(bm_msgs[i].ts);
+        }
+        mon_y += ROW_H;
+    }
+
+    if (!any_device) {
+        gfx->setTextSize(1);
+        gfx->setTextColor(COL_GREY, COL_BG);
+        gfx->setCursor(MARGIN_X, mon_y);
+        gfx->print("no recent activity");
     }
 
     // ── Monitoring / sniffer status bar (full width, bottom) ─────────────────
